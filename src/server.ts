@@ -57,7 +57,8 @@ export function createApp(tracker: Tracker): Server {
         send(res, 200, tracker.decide(Number(m[1]), decision, await readJson(req), ctx));
       } else if (route === "GET /api/audit") {
         const projectId = url.searchParams.get("projectId");
-        send(res, 200, tracker.listAudit(projectId ? Number(projectId) : undefined));
+        if (projectId !== null && !/^\d+$/.test(projectId)) throw new TrackerError(400, "projectId must be a whole number");
+        send(res, 200, tracker.listAudit(projectId === null ? undefined : Number(projectId)));
       } else if (route === "GET /api/audit/verify") {
         send(res, 200, tracker.verifyAudit());
       } else {

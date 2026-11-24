@@ -154,7 +154,7 @@ export class Tracker {
   }
 
   listAudit(projectId?: number): AuditEvent[] {
-    const rows = projectId
+    const rows = projectId !== undefined
       ? this.db.prepare("SELECT * FROM audit_events WHERE project_id = ? ORDER BY id").all(projectId)
       : this.db.prepare("SELECT * FROM audit_events ORDER BY id").all();
     return rows.map((r: Row) => ({
@@ -276,6 +276,8 @@ export class Tracker {
     ctx: SignerContext = {},
   ): ChangeOrder {
     const typedName = text(input.typedName, "typedName", 120);
+    // A missing amount is a malformed request, not a stale price.
+    if (decision === "approved") integer(input.expectedTotalCents, "expectedTotalCents");
     const reason = input.reason === undefined || input.reason === "" ? null : text(input.reason, "reason", 500);
     return transaction(this.db, () => {
       const co = this.getChangeOrder(id);
@@ -291,12 +293,13 @@ export class Tracker {
       }
       const at = this.now().toISOString();
       const documentHash = hashDocument(co);
-      this.db.prepare("UPDATE change_orders SET status = ?, decided_at = ? WHERE id = ?").run(decision, at, id);
+      // Signature first: a trigger refuses the status change unless a matching signature exists.
       this.db
         .prepare(
           "INSERT INTO signatures (change_order_id, decision, typed_name, signed_at, total_cents, document_hash, ip, user_agent) VALUES (?,?,?,?,?,?,?,?)",
         )
         .run(id, decision, typedName, at, co.totalCents, documentHash, ctx.ip ?? "unknown", ctx.userAgent ?? "unknown");
+      this.db.prepare("UPDATE change_orders SET status = ?, decided_at = ? WHERE id = ?").run(decision, at, id);
       const payload: Row = { typedName, totalCents: co.totalCents, documentHash };
       if (reason) payload.reason = reason;
       if (decision === "approved") {

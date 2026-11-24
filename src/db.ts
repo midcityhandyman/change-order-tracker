@@ -4,7 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 // - Money is stored as integer cents.
 // - The rules that matter are enforced by triggers, not only by application code:
 //   audit events and signatures are append only, a decided change order is frozen,
-//   and a project's contract total must always equal base + approved change orders.
+//   a change order can only become approved or declined when a signature row for that
+//   decision and amount exists, and a project's contract total must always equal
+//   base + approved change orders.
 const SCHEMA = `
 CREATE TABLE projects (
   id INTEGER PRIMARY KEY,
@@ -71,6 +73,21 @@ BEGIN SELECT RAISE(ABORT, 'signature records are immutable'); END;
 CREATE TRIGGER signature_no_delete BEFORE DELETE ON signatures
 BEGIN SELECT RAISE(ABORT, 'signature records are immutable'); END;
 
+CREATE TRIGGER signature_needs_priced_order BEFORE INSERT ON signatures
+WHEN NOT EXISTS (
+  SELECT 1 FROM change_orders
+  WHERE id = NEW.change_order_id AND status = 'priced' AND total_cents = NEW.total_cents)
+BEGIN SELECT RAISE(ABORT, 'a signature needs a priced change order with the same total'); END;
+
+CREATE TRIGGER change_order_starts_requested BEFORE INSERT ON change_orders
+WHEN NEW.status != 'requested' OR NEW.total_cents IS NOT NULL OR NEW.decided_at IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'a change order starts as requested with no price'); END;
+CREATE TRIGGER change_order_decision_needs_signature BEFORE UPDATE ON change_orders
+WHEN OLD.status NOT IN ('approved','declined') AND NEW.status IN ('approved','declined')
+  AND (NEW.total_cents IS NOT OLD.total_cents OR NOT EXISTS (
+    SELECT 1 FROM signatures
+    WHERE change_order_id = OLD.id AND decision = NEW.status AND total_cents = OLD.total_cents))
+BEGIN SELECT RAISE(ABORT, 'a decision needs a matching signature'); END;
 CREATE TRIGGER change_order_frozen BEFORE UPDATE ON change_orders
 WHEN OLD.status IN ('approved','declined')
 BEGIN SELECT RAISE(ABORT, 'a decided change order is frozen'); END;

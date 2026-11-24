@@ -65,4 +65,10 @@ test("errors: bad JSON, missing fields, unknown ids and routes", async () => {
   assert.equal((await call("/api/projects/99/change-orders", { title: "T", description: "D", requestedBy: "R" })).status, 404);
   assert.equal((await call("/api/change-orders/99")).status, 404);
   assert.equal((await call("/api/nope")).status, 404);
+  assert.equal((await call("/api/audit?projectId=abc")).status, 400);
+  assert.deepEqual((await call("/api/audit?projectId=99")).data, []);
+  // Approving without the amount the customer was shown is a bad request.
+  const noAmount = await call("/api/change-orders/1/approve", { typedName: "Alex Sample" });
+  assert.equal(noAmount.status, 400);
+  assert.match(noAmount.data.error, /expectedTotalCents/);
 });

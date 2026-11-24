@@ -63,6 +63,9 @@ test("approval is rejected for a wrong name, a stale price, or an unpriced order
   assert.equal(status(() => tracker.decide(co.id, "approved", { typedName: "Someone Else", expectedTotalCents: 52000 })), 422);
   assert.equal(status(() => tracker.decide(co.id, "approved", { typedName: "Casey Example", expectedTotalCents: 1 })), 409);
   assert.equal(status(() => tracker.decide(co.id, "approved", { typedName: "", expectedTotalCents: 52000 })), 400);
+  // A missing or non-numeric amount is a bad request, not a "price changed" conflict.
+  assert.equal(status(() => tracker.decide(co.id, "approved", { typedName: "Casey Example" })), 400);
+  assert.equal(status(() => tracker.decide(co.id, "approved", { typedName: "Casey Example", expectedTotalCents: "52000" })), 400);
   const bare = tracker.requestChangeOrder(project.id, { title: "T", description: "D", requestedBy: "R" });
   assert.equal(status(() => tracker.decide(bare.id, "approved", { typedName: "Casey Example", expectedTotalCents: 0 })), 409);
   assert.equal(total(tracker, project.id), 1000000);
@@ -121,6 +124,28 @@ test("database triggers block direct tampering", () => {
   assert.throws(() => db.exec("UPDATE change_orders SET total_cents = 1"), /frozen/);
   assert.throws(() => db.exec("UPDATE line_items SET unit_price_cents = 1"), /frozen/);
   assert.throws(() => db.exec("DELETE FROM line_items"), /frozen/);
+  assert.equal(total(tracker, project.id), 1052000);
+});
+
+test("database refuses an approval, decline or signature that skips the signing step", () => {
+  const { db, tracker, project } = setup();
+  const co = pricedOrder(tracker, project.id);
+  const bare = tracker.requestChangeOrder(project.id, { title: "T", description: "D", requestedBy: "R" });
+  const sign = (id: number, cents: number) =>
+    db.exec(`INSERT INTO signatures (change_order_id, decision, typed_name, signed_at, total_cents, document_hash, ip, user_agent) VALUES (${id}, 'approved', 'Casey Example', '2030-01-01T00:00:00.000Z', ${cents}, 'x', 'x', 'x')`);
+  // Flipping the status by hand, with no signature on file.
+  assert.throws(() => db.exec(`UPDATE change_orders SET status = 'approved' WHERE id = ${co.id}`), /matching signature/);
+  assert.throws(() => db.exec(`UPDATE change_orders SET status = 'declined' WHERE id = ${co.id}`), /matching signature/);
+  // Creating a change order that is born approved.
+  assert.throws(() => db.exec(`INSERT INTO change_orders (project_id, number, title, description, requested_by, status, total_cents, created_at) VALUES (${project.id}, 9, 'T', 'D', 'R', 'approved', 500000, 'x')`), /starts as requested/);
+  // Signing something that is not priced, or signing a different amount than the priced total.
+  assert.throws(() => sign(bare.id, 0), /priced change order/);
+  assert.throws(() => sign(co.id, 1), /priced change order/);
+  assert.equal(tracker.getChangeOrder(co.id).status, "priced");
+  assert.equal(tracker.getChangeOrder(co.id).signature, null);
+  assert.equal(total(tracker, project.id), 1000000);
+  // The normal path still works after all of that.
+  assert.equal(tracker.decide(co.id, "approved", { typedName: "Casey Example", expectedTotalCents: 52000 }).status, "approved");
   assert.equal(total(tracker, project.id), 1052000);
 });
 
