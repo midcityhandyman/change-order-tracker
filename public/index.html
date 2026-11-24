@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Change Order Tracker</title>
+<style>
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 0; background: #f4f5f7; color: #1c2430; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; } h2 { font-size: 16px; margin: 0 0 8px; }
+  .card { background: #fff; border: 1px solid #d9dde3; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .totals { display: flex; gap: 24px; flex-wrap: wrap; }
+  .totals b { display: block; font-size: 20px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #e3e7ee; }
+  .approved { background: #cdeed6; } .declined { background: #f6d2d2; } .priced { background: #fdebc0; }
+  input, textarea, select, button { font: inherit; padding: 6px 8px; margin: 3px 0; box-sizing: border-box; }
+  input, textarea { width: 100%; } button { cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eceef2; vertical-align: top; }
+  .num { text-align: right; } .muted { color: #5b6675; font-size: 13px; } .err { color: #a11; }
+  code { font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Change Order Tracker</h1>
+  <p class="muted">Demo with fake data. The contract total moves only when the customer approves.</p>
+  <select id="project"></select>
+  <div class="card"><div class="totals" id="totals"></div></div>
+  <div id="orders"></div>
+  <div class="card">
+    <h2>Request a change</h2>
+    <input id="r-title" placeholder="Title">
+    <textarea id="r-desc" placeholder="What is changing and why"></textarea>
+    <input id="r-by" placeholder="Requested by">
+    <button id="r-go">Submit request</button>
+  </div>
+  <div class="card">
+    <h2>Audit trail <span class="muted" id="chain"></span></h2>
+    <table id="audit"></table>
+  </div>
+  <p class="err" id="error"></p>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+const money = (c) => (c < 0 ? "-" : "") + "$" + (Math.abs(c) / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+async function act(fn) {
+  $("error").textContent = "";
+  try { await fn(); } catch (e) { $("error").textContent = e.message; }
+  await render();
+}
+
+function orderCard(co, project) {
+  const items = co.lineItems.map((i) => `<tr><td>${esc(i.description)}</td><td class="num">${i.quantity}</td>
+    <td class="num">${money(i.unitPriceCents)}</td><td class="num">${money(i.quantity * i.unitPriceCents)}</td></tr>`).join("");
+  let actions = "";
+  if (co.status === "requested" || co.status === "priced") {
+    actions += `<p class="muted">Pricing (office): one line per item as <i>description | quantity | unit price in dollars</i></p>
+      <textarea id="p-lines-${co.id}" placeholder="Extra outlet | 2 | 185.00"></textarea>
+      <input id="p-by-${co.id}" placeholder="Priced by">
+      <button data-price="${co.id}">${co.status === "priced" ? "Replace price" : "Set price"}</button>`;
+  }
+  if (co.status === "priced") {
+    actions += `<p class="muted">Customer approval: type your full name (${esc(project.customerName)}) to sign for ${money(co.totalCents)}.</p>
+      <input id="s-name-${co.id}" placeholder="Type full name to sign">
+      <button data-approve="${co.id}" data-total="${co.totalCents}">Approve ${money(co.totalCents)}</button>
+      <button data-decline="${co.id}">Decline</button>`;
+  }
+  const sig = co.signature ? `<p class="muted">Signed "${esc(co.signature.typedName)}" at ${esc(co.signature.signedAt)}
+    (${esc(co.signature.decision)}, ${money(co.signature.totalCents)})<br>Document hash <code>${esc(co.signature.documentHash)}</code></p>` : "";
+  return `<div class="card"><h2>CO-${co.number}: ${esc(co.title)} <span class="badge ${co.status}">${co.status}</span></h2>
+    <p>${esc(co.description)}</p><p class="muted">Requested by ${esc(co.requestedBy)} at ${esc(co.createdAt)}</p>
+    ${items ? `<table><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Line</th></tr>${items}
+      <tr><th colspan="3">Total</th><th class="num">${money(co.totalCents)}</th></tr></table>` : ""}${sig}${actions}</div>`;
+}
+
+async function render() {
+  const id = $("project").value;
+  const [p, audit, chain] = await Promise.all([api("/api/projects/" + id), api("/api/audit?projectId=" + id), api("/api/audit/verify")]);
+  $("totals").innerHTML = `<div>Base contract<b>${money(p.baseContractCents)}</b></div>
+    <div>Approved changes<b>${money(p.approvedChangeCents)}</b></div>
+    <div>Contract total<b>${money(p.contractTotalCents)}</b></div>
+    <div>Awaiting approval<b>${money(p.pendingCents)}</b></div>`;
+  $("orders").innerHTML = p.changeOrders.map((co) => orderCard(co, p)).join("");
+  $("chain").textContent = chain.ok ? `(hash chain verified, ${chain.events} events)` : `(CHAIN BROKEN at event ${chain.brokenAtId})`;
+  $("audit").innerHTML = "<tr><th>#</th><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr>" + audit.map((e) =>
+    `<tr><td>${e.id}</td><td>${esc(e.at)}</td><td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td><code>${esc(JSON.stringify(e.payload))}</code></td></tr>`).join("");
+}
+
+function parseLines(raw) {
+  return raw.split("\n").filter((l) => l.trim()).map((line) => {
+    const [description, qty, price] = line.split("|").map((s) => s.trim());
+    return { description, quantity: Number(qty), unitPriceCents: Math.round(Number(price) * 100) };
+  });
+}
+
+$("orders").addEventListener("click", (ev) => {
+  const d = ev.target.dataset;
+  if (d.price) act(() => api(`/api/change-orders/${d.price}/price`, { lineItems: parseLines($("p-lines-" + d.price).value), pricedBy: $("p-by-" + d.price).value }));
+  if (d.approve) act(() => api(`/api/change-orders/${d.approve}/approve`, { typedName: $("s-name-" + d.approve).value, expectedTotalCents: Number(d.total) }));
+  if (d.decline) act(() => api(`/api/change-orders/${d.decline}/decline`, { typedName: $("s-name-" + d.decline).value }));
+});
+$("r-go").addEventListener("click", () => act(async () => {
+  await api(`/api/projects/${$("project").value}/change-orders`, { title: $("r-title").value, description: $("r-desc").value, requestedBy: $("r-by").value });
+  $("r-title").value = $("r-desc").value = "";
+}));
+$("project").addEventListener("change", render);
+
+api("/api/projects").then((projects) => {
+  $("project").innerHTML = projects.map((p) => `<option value="${p.id}">${esc(p.name)} (${esc(p.customerName)})</option>`).join("");
+  return render();
+});
+</script>
+</body>
+</html>

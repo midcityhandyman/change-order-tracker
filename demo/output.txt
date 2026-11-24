@@ -1,0 +1,49 @@
+Change order tracker demo (fake data, in-memory store, no network beyond localhost)
+Project: Sample Kitchen Refresh, customer: Alex Sample
+   contract total at start: $18,500.00 (base $18,500.00, approved changes $0.00, awaiting approval $0.00)
+
+1. Field lead requests a change
+   CO-1 "Add under-cabinet lighting" status=requested
+   contract total after request: $18,500.00 (base $18,500.00, approved changes $0.00, awaiting approval $0.00)
+
+2. Office prices it
+   3 x LED strip kit @ $45.00 = $135.00
+   4 x Electrician labor (hours) @ $95.00 = $380.00
+   CO-1 total $515.00 status=priced
+   contract total after pricing: $18,500.00 (base $18,500.00, approved changes $0.00, awaiting approval $515.00)
+
+3. Someone else tries to sign for the customer
+   HTTP 422: typed name does not match the customer name on the project
+
+4. Office reprices; customer tries to approve the old price they were shown
+   new total $610.00
+   HTTP 409: the price changed since it was shown; reload and review before approving
+   contract total still: $18,500.00 (base $18,500.00, approved changes $0.00, awaiting approval $610.00)
+
+5. Customer approves the current price by typing their name
+   status=approved
+   signature: typed name "Alex Sample", signed at 2030-03-04T14:07:30.000Z, amount $610.00
+   document hash: 27ece78be34494eb51f6f972f14abcafd9434265aa5d954199ff1dccf31702d7
+   contract total after approval: $19,110.00 (base $18,500.00, approved changes $610.00, awaiting approval $0.00)
+
+6. A second change is priced as a credit and declined
+   CO-2 total -$380.00 status=declined, signed "Alex Sample"
+   contract total after decline: $19,110.00 (base $18,500.00, approved changes $610.00, awaiting approval $0.00)
+
+7. Trying to change an approved change order
+   API: HTTP 409: change order is already approved and cannot be repriced
+   raw SQL "UPDATE projects SET contract_total_cents = contract_total_cents + 99900" -> blocked: contract total changes only through approved change orders
+   raw SQL "UPDATE signatures SET typed_name = 'Forged Name'" -> blocked: signature records are immutable
+   raw SQL "DELETE FROM audit_events WHERE id = 3" -> blocked: audit trail is append only
+   contract total unchanged: $19,110.00 (base $18,500.00, approved changes $610.00, awaiting approval $0.00)
+
+8. Audit trail
+   #1 2030-03-04T14:00:00.000Z system                 project.created          hash e7b48690bbaa
+   #2 2030-03-04T14:03:00.000Z Sam Fieldlead          change_order.requested   hash 156000d925fb
+   #3 2030-03-04T14:04:30.000Z Pat Estimator          change_order.priced      hash 864b91f56e2f
+   #4 2030-03-04T14:06:00.000Z Pat Estimator          change_order.repriced    hash 9dd7f47ed141
+   #5 2030-03-04T14:07:30.000Z customer:Alex Sample   change_order.approved    hash f84a573fb8e9
+   #6 2030-03-04T14:10:30.000Z Sam Fieldlead          change_order.requested   hash f47cd816d977
+   #7 2030-03-04T14:12:00.000Z Pat Estimator          change_order.priced      hash ed42b2212f32
+   #8 2030-03-04T14:13:30.000Z customer:Alex Sample   change_order.declined    hash fffe57bcd074
+   hash chain verified: true (8 events)

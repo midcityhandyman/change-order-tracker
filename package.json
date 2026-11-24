@@ -1,0 +1,20 @@
+{
+  "name": "change-order-tracker",
+  "version": "0.1.0",
+  "description": "Change order tracker: request, pricing, typed-name customer approval, immutable audit trail.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "node --test \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "demo": "node demo/run-demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
